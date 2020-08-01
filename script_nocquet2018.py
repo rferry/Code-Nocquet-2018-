@@ -23,22 +23,12 @@ import numpy as np
 import scipy
 from scipy.optimize import lsq_linear
 from scipy.optimize import nnls
-from scipy.integrate import quad
 import scipy.stats
-import matplotlib.pyplot as plt
 
-G = np.array([[-7., -4.], [1., 10.], [2., -11.]])
-d = np.array([[10.], [3.], [-5.]])
-Cd = np.identity(3, dtype=float) * 5.**2
-Cm = np.identity(2, dtype=float) * (0.5 / 2)**2
-Cd_inv = np.linalg.inv(Cd)
-Cm_inv = np.linalg.inv(Cm)
-m0 = np.array([[0.5], [0.5]])
-m = np.array([[0.5], [0.3]])
 
 def MAP(G, d, Cd, Cm, m0, method="non-neg", bounds=(0, 10)):
     """
-    Maximum a posteriori probability estimate. 
+    Computes maximum a posteriori probability estimate. 
     Solves Eq.15 from Nocquet (2018).
 
     Parameters
@@ -102,9 +92,9 @@ def MAP(G, d, Cd, Cm, m0, method="non-neg", bounds=(0, 10)):
     return res
 
 
-def joint_posterior_pdf(G, d, Cd, Cm, m, m0, bounds=(0, 10)):
+def joint_posterior(G, d, Cd, Cm, m, m0, bounds=(0, 10)):
     """
-    Joint posterior probability of the set of parameters m.
+    Computes joint posterior probability of the set of parameters m.
     Solves Eq.8 or 9 from Nocquet (2018).
     Uses TMVN approximation.
 
@@ -170,197 +160,83 @@ def joint_posterior_pdf(G, d, Cd, Cm, m, m0, bounds=(0, 10)):
         raise ValueError("Each lower bound must be strictly less than each "
                          "upper bound.")
     
-    
+    # COMPUTATIONS
+    # Computes TMVN approximation
     Kplus, error = scipy.stats.mvn.mvnun(lb, ub, mtilde, Cmtilde)
     assert error==0, 'Potential errors in TMVN approximation'
     Kplus = 1./Kplus
-    sigma = Kplus * np.exp(-0.5 * ((m - mtilde).T @ np.linalg.inv(Cmtilde) @ (m - mtilde)))
     
-    return sigma
+    # Computes joint posterior
+    jp = Kplus * np.exp(-0.5 * ((m - mtilde).T @ np.linalg.inv(Cmtilde) @ \
+                                   (m - mtilde)))
+    
+    return jp
 
 
-def likelihood(G, d, Cd, m):
-    Cd_inv = np.linalg.inv(Cd)
-    return 0.5 * (((G @ m) - d).transpose() @ Cd_inv @ ((G @ m) - d))
-
-
-def exact_uniform(G, d, Cd, m, m0):
+def marginal_1D(G, d, Cd, Cm, m0, m_value, ind_m1, bounds=(0, 10)):
     """
-    Exact solution for the uniform overdetermined case (Eq 22 in Nocquet (2018)).
+    Computes 1-D marginal probability.
+    Solves Eq.11 or 12 from Njppdfocquet (2018).
+    Uses TMVN approximation.
+
+    Parameters
+    ----------
+    G : array, shape (n, p)
+        Model matrix.
+    d : array, shape (n,)
+        Data vector.
+    Cd : array, shape (p, p)
+        Data covariance matrix.
+    Cm : array, shape (n, n)
+        Model covariance matrix.
+    m0 : array, shape (p,)
+        Mean of a priori Gaussian density probability function.
+    m_value : float
+        Value to evaluate.
+    ind_m1 : int
+        Index of the parameter to evaluate.
+    bounds : 2-tuple or array-like, optional
+        Lower and upper bounds on independent variables. Each array must have 
+        shape (p,) or be a scalar, in the latter case a bound will be the same
+        for all variables. The default is (0, 10).
+
+
+    Raises
+    ------
+    ValueError
+        If TLVN approximation is not working.
+
+    Returns
+    -------
+    float
+        Marginal probability for the value m_value.
+
     """
+    # Converts m_value to an array
+    m_value = np.array([m_value])
     
-    iCd = np.linalg.inv(Cd)
-    detCd = np.linalg.det(Cd)
-    n = len(d)
-    
-    Cmtilde = np.linalg.inv(G.T @ iCd @ G)  # Eq 22
-    mtilde = Cmtilde @ G.T @ iCd @ d  # Eq 22
-    
-    Kd = 1. / ((2 * np.pi)**(1/n) * np.sqrt(detCd))
-    K0 = d.T @ iCd @ (d - G @ mtilde)  # Eq B2
-    Ku0 = np.exp(-0.5 * K0) * Kd
-    
-    jppdf = Ku0 * np.exp(-0.5 * ((m - mtilde).T @ np.linalg.inv(Cmtilde) @ (m - mtilde)))
-    
-    return jppdf
-
-
-def multi_gauss_distrib(G, d, Cd, Cm, m, m0):
-    iCd = np.linalg.inv(Cd)
-    iCm = np.linalg.inv(Cm)   
-    n= len(d)
-    
-    Cmtilde = np.linalg.inv((G.T @ iCd @ G) + iCm)
-    mtilde = np.linalg.inv((G.T @ iCd @ G) + iCm) @ ((G.T @ iCd @ d) + iCm @ m0)
-    
-    iCmtilde = np.linalg.inv(Cmtilde)
-    detCmtilde = np.linalg.det(Cmtilde)
-    
-    res = (2 * np.pi)**(-n/2) * detCmtilde**(0.5)  * np.exp(-0.5 * ((m - mtilde).T @ iCmtilde @ (m - mtilde)))
-    return res
-    
-
-def marginal_pdf(G, d, Cd, Cm, m0, m_value, ind_m1, bounds=(0, 1)):
-    """
-    ind_m1 : index in m of the value to evaluate 
-    m_value : value of m to evaluate
-    
-    bounds are constant for all m
-    """
-    # # Computes inverse
-    # iCd = np.linalg.inv(Cd)
-    # iCm = np.linalg.inv(Cm)
-    
-    # # Index of the last element 
-    # p = np.shape(Cm)[0] - 1 
-    
-    # # Reorganizes m0
-    # rm0 = np.concatenate((m0[ind_m1], np.delete(m0, ind_m1)))
-    # rm0 = rm0.reshape(-1, 1) # to be a column vector
-    
-    # # Computes Cmtilde and mtilde
-    # Cmtilde = np.linalg.inv((G.T @ iCd @ G) + iCm)    
-    # mtilde = np.linalg.inv((G.T @ iCd @ G) + iCm) @ ((G.T @ iCd @ d) + iCm @ rm0)
-
-    # # Reorganise Cmtilde
-    # rCmtilde = np.copy(Cmtilde)  # initialisation
-    
-    # if ind_m1 == 0:  # if it is the first value, no need to reorganise
-    #     pass
-    
-    # elif ind_m1 == p :  # if it is the last value of m
-    #     rCmtilde[1:ind_m1, 0] = np.copy(Cmtilde[1:ind_m1, ind_m1])
-    #     rCmtilde[1:ind_m1, ind_m1] = np.copy(Cmtilde[1:ind_m1, 0])
-        
-    #     rCmtilde[0, 1:-1] = np.copy(Cmtilde[ind_m1, 1:-1])
-    #     rCmtilde[ind_m1, 1:-1] = np.copy(Cmtilde[0, 1:-1])
-    
-    # elif ind_m1 == 1 :  # if it is the second one
-    #     rCmtilde[1+ind_m1, 0] = np.copy(Cmtilde[1+ind_m1, ind_m1])
-    #     rCmtilde[1+ind_m1, ind_m1] = np.copy(Cmtilde[1+ind_m1, 0])
-
-    #     rCmtilde[0, 2:] = np.copy(Cmtilde[ind_m1, 2:])
-    #     rCmtilde[ind_m1, 2:] = np.copy(Cmtilde[0, 2:])
-        
-    # else :
-    #     rCmtilde[1:ind_m1, 0] = np.copy(Cmtilde[1:ind_m1, ind_m1])
-    #     rCmtilde[1:ind_m1, ind_m1] = np.copy(Cmtilde[1:ind_m1, 0])
-        
-    #     rCmtilde[ind_m1+1, 0] = np.copy(Cmtilde[ind_m1+1, ind_m1])
-    #     rCmtilde[ind_m1+1, ind_m1] = np.copy(Cmtilde[ind_m1+1, 0])
-        
-    #     rCmtilde[0, 1:ind_m1] = np.copy(Cmtilde[ind_m1, 1:ind_m1])
-    #     rCmtilde[ind_m1, 1:ind_m1] = np.copy(Cmtilde[0, 1:ind_m1])
-        
-    #     rCmtilde[0, ind_m1+1:] = np.copy(Cmtilde[ind_m1, ind_m1+1:])
-    #     rCmtilde[ind_m1, ind_m1+1:] = np.copy(Cmtilde[0, ind_m1+1:])
-     
-    # # Switch diagonal values
-    # rCmtilde[0,0] = np.copy(Cmtilde[ind_m1, ind_m1])
-    # rCmtilde[ind_m1, ind_m1] = np.copy(Cmtilde[0,0])
-    
-    # # Partitioned Cmtilde
-    # Cmtilde11 = rCmtilde[0,0]ind_m1 = 1
-    # Cmtilde21 = rCmtilde[0, 1:]
-    # Cmtilde12 = rCmtilde[1:, 0]
-    # Cmtilde22 = rCmtilde[1:, 1:]
-    
-    # # Inverse of Cmtilde11
-    # if isinstance(Cmtilde11, (float, int)):  # if Cmtilde11 is not an array        
-    #     iCmtilde11 = np.array([1. / Cmtilde11])
-    # else :
-    #     iCmtilde11 = np.linalg.inv(Cmtilde11)
-    
-    # # Reorganise mtilde
-    # rmtilde = np.copy(mtilde)
-    # rmtilde[0] = mtilde[ind_m1]
-    # try:
-    #     rmtilde[1:] = np.delete(mtilde, ind_m1).reshape(np.shape(rmtilde[1:]))
-    # except ValueError:
-    #     rmtilde[1:] = np.delete(mtilde, ind_m1)
-    
-    # # Partitioned rmtilde
-    # rmtilde1 = rmtilde[0]
-    # rmtilde2 = rmtilde[1:] 
-
-    # # Computes A, iA and defines b(x)
-    # # if isinstance(Cmtilde12.T @ iCmtilde11, (float, int, np.float64, np.int64, np.float32, np.int32)):
-    # if (len(Cmtilde) == 1 and len(iCmtilde11) ==1):
-    # # If Cmtilde12 and Cmtilde11 are arrays of one element
-    #     A = Cmtilde22 - (np.array([Cmtilde12.T @ iCmtilde11]) @ Cmtilde12)
-    #     iA = 1. / A
-    
-    #     def b(x):
-    #         return rmtilde2 + (np.array([Cmtilde12.T @ iCmtilde11]) @ (x - rmtilde1))
-    # else :
-    # # If Cmtilde12 and Cmtilde11 are not arrays
-    #     A = Cmtilde22 - (Cmtilde12.T @ iCmtilde11 @ Cmtilde12)
-    #     # Cmtilde12.reshape(-1, 1) is equivalent to Cmtilde12.T
-    #     iA = np.linalg.inv(A)
-    #     def b(x):
-    #             return rmtilde2 + (Cmtilde12.T @ iCmtilde11 @ (x - rmtilde1))
-    
-            
-    # def Q1(x):
-    #     return (x - rmtilde1).T @ iCmtilde11 @ (x - rmtilde1)
-    
-    # def Q2(x, y):
-    #     return (y - b(x)).T @ iA @ (y - b(x))
-    
-    # K0 = (G @ m0 - d).T @ np.linalg.inv((G @ Cm @ G.T) + Cd) @ (G @ m0 - d)
-    # lbounds = np.ones(len(m0)) * bounds[0]
-    # ubounds = np.ones(len(m0)) * bounds[1]
-    # kb, error = scipy.stats.mvn.mvnun(lbounds, ubounds, mtilde, Cmtilde)
-    # kb = 1./kb
-    # Kb = kb * np.exp(-K0/2)
-    
-    # # print("b(m1)=", b(m1), "iA=", iA)
-    # tmvn = scipy.stats.mvn.mvnun(np.array([bounds[0]]), np.array([bounds[1]]), b(m_value), iA)[0]
-    
-    # return Kb * np.exp(-0.5 * (np.array([(m_value - rmtilde1).T @ iCmtilde11]) @ (m_value - rmtilde1))) * tmvn 
-    # return mtilde
-    # Computes inverse
-    iCd = np.linalg.inv(Cd)
+    # Inverse of Cm and Cd
     iCm = np.linalg.inv(Cm)
+    iCd = np.linalg.inv(Cd)    
+
+    # Parameters number
+    p = m0.shape[0]
         
-    # Index of the last element 
-    p = np.shape(Cm)[0] - 1 
-        
-    # Reorganizes m0
-    rm0 = np.concatenate((m0[ind_m1], np.delete(m0, ind_m1)))
-    rm0 = rm0.reshape(-1, 1) # to be a column vector
+    # Reorganizes m0 to have (m0_1, m0_2)
+    rm0 = np.concatenate((np.array([m0[ind_m1]]), np.delete(m0, ind_m1)))
         
     # Computes Cmtilde and mtilde
     Cmtilde = np.linalg.inv((G.T @ iCd @ G) + iCm)    
-    mtilde = np.linalg.inv((G.T @ iCd @ G) + iCm) @ ((G.T @ iCd @ d) + iCm @ rm0)
+    mtilde = np.linalg.inv((G.T @ iCd @ G) + iCm) @ ((G.T @ iCd @ d) + \
+                                                     iCm @ rm0)
     
-    # Reorganise Cmtilde
+    # Reorganizes Cmtilde
     rCmtilde = np.copy(Cmtilde)  # initialisation
         
     if ind_m1 == 0:  # if it is the first value, no need to reorganise
         pass 
         
-    elif ind_m1 == p :  # if it is the last value of m
+    elif ind_m1 == (p-1) :  # if it is the last parameter of m
         rCmtilde[1:ind_m1, 0] = np.copy(Cmtilde[1:ind_m1, ind_m1])
         rCmtilde[1:ind_m1, ind_m1] = np.copy(Cmtilde[1:ind_m1, 0])
             
@@ -374,7 +250,7 @@ def marginal_pdf(G, d, Cd, Cm, m0, m_value, ind_m1, bounds=(0, 1)):
         rCmtilde[0, 2:] = np.copy(Cmtilde[ind_m1, 2:])
         rCmtilde[ind_m1, 2:] = np.copy(Cmtilde[0, 2:])
             
-    else :
+    else :  # otherwise 
         rCmtilde[1:ind_m1, 0] = np.copy(Cmtilde[1:ind_m1, ind_m1])
         rCmtilde[1:ind_m1, ind_m1] = np.copy(Cmtilde[1:ind_m1, 0])
             
@@ -387,16 +263,14 @@ def marginal_pdf(G, d, Cd, Cm, m0, m_value, ind_m1, bounds=(0, 1)):
         rCmtilde[0, ind_m1+1:] = np.copy(Cmtilde[ind_m1, ind_m1+1:])
         rCmtilde[ind_m1, ind_m1+1:] = np.copy(Cmtilde[0, ind_m1+1:])
          
-    # Switch diagonal values
+    # Switch diagonal values of Cmtilde 
     rCmtilde[0,0] = np.copy(Cmtilde[ind_m1, ind_m1])
     rCmtilde[ind_m1, ind_m1] = np.copy(Cmtilde[0,0])
         
     # Partitioned Cmtilde
     Cmtilde11 = rCmtilde[0,0]
-    Cmtilde21 = rCmtilde[0, 1:]
     Cmtilde22 = rCmtilde[1:, 1:]
     Cmtilde12 = rCmtilde[1:, 0]
-    Cmtilde12 = Cmtilde12.reshape(-1, 1)  # to have a column vector
         
     # Inverse of Cmtilde11
     if isinstance(Cmtilde11, (float, int)):  # if Cmtilde11 is not an array        
@@ -404,7 +278,7 @@ def marginal_pdf(G, d, Cd, Cm, m0, m_value, ind_m1, bounds=(0, 1)):
     else :
         iCmtilde11 = np.linalg.inv(Cmtilde11)
         
-    # Reorganise mtilde
+    # Reorganizes mtilde
     rmtilde = np.copy(mtilde)
     rmtilde[0] = mtilde[ind_m1]
     try:
@@ -417,14 +291,14 @@ def marginal_pdf(G, d, Cd, Cm, m0, m_value, ind_m1, bounds=(0, 1)):
     rmtilde2 = rmtilde[1:] 
     
     # Computes A, iA and defines b(x)
-    # if isinstance(Cmtilde12.T @ iCmtilde11, (float, int, np.float64, np.int64, np.float32, np.int32)):
     if (len(Cmtilde) == 1 and len(iCmtilde11) ==1):
     # If Cmtilde12 and Cmtilde11 are arrays of one element
         A = Cmtilde22 - (np.array([Cmtilde12.T @ iCmtilde11]) @ Cmtilde12)
         iA = 1. / A
         
         def b(x):
-            return rmtilde2 + (np.array([Cmtilde12.T @ iCmtilde11]) @ (x - rmtilde1))
+            return rmtilde2 + (np.array([Cmtilde12.T @ iCmtilde11]) @ \
+                               (x - rmtilde1))
     if len(iCmtilde11) == 1:
         A = Cmtilde22 - ((Cmtilde12.T * iCmtilde11) @ Cmtilde12)
         iA = np.linalg.inv(A)
@@ -437,25 +311,174 @@ def marginal_pdf(G, d, Cd, Cm, m0, m_value, ind_m1, bounds=(0, 1)):
         def b(x):
             return rmtilde2 + (Cmtilde12.T @ iCmtilde11 @ (x - rmtilde1))
         
-                
-    def Q1(x):
-        return (x - rmtilde1).T @ iCmtilde11 @ (x - rmtilde1)
-        
-    def Q2(x, y):
-        return (y - b(x)).T @ iA @ (y - b(x))
-        
-    K0 = (G @ m0 - d).T @ np.linalg.inv((G @ Cm @ G.T) + Cd) @ (G @ m0 - d)
-    lbounds = np.ones(np.shape(G)[1]) * bounds[0]
-    ubounds = np.ones(np.shape(G)[1]) * bounds[1]
-    kb, error = scipy.stats.mvn.mvnun(lbounds, ubounds, mtilde, Cmtilde)
-    kb = 1./kb
-    # Kb = kb * np.exp(-K0/2)
-    Kb = kb
     
-    lbounds = np.ones(np.shape(G)[1]-1) * bounds[0]
-    ubounds = np.ones(np.shape(G)[1]-1) * bounds[1]    
-    # print("b(m1)=", b(m1), "iA=", iA)
-    # tmvn = scipy.stats.mvn.mvnun(np.array([bounds[0], bounds[0]]), np.array([bounds[1], bounds[1]]), b(m_value), iA)[0]
-    tmvn = scipy.stats.mvn.mvnun(lbounds, ubounds, b(m_value), iA)[0]
+    # DEALING WITH BOUNDS
+    # Function to convert tuple bounds to array bounds 
+    def prepare_bounds(bounds, p):
+        lb, ub = [np.asarray(b, dtype=float) for b in bounds]
+    
+        if lb.ndim == 0:
+            lb = np.resize(lb, p)
+    
+        if ub.ndim == 0:
+            ub = np.resize(ub, p)
+    
+        return lb, ub    
+    
+    # Computes lower and upper bounds
+    lb, ub = prepare_bounds(bounds, p)    
+    
+    # Checks that bounds are correctly definedG = np.array([[-7., -4.], [1., 10.], [2., -11.]])
+d = np.array([[10.], [3.], [-5.]])
+Cd = np.identity(3, dtype=float) * 5.**2
+Cm = np.identity(2, dtype=float) * (0.5 / 2)**2
+Cd_inv = np.linalg.inv(Cd)
+Cm_inv = np.linalg.inv(Cm)
+m0 = np.array([[0.5], [0.5]])
+m = np.array([[0.5], [0.3]])
+    if lb.shape != (p,) and ub.shape != (p,):
+        raise ValueError("Bounds have wrong shape.")
+
+    if np.any(lb >= ub):
+        raise ValueError("Each lower bound must be strictly less than each "
+                         "upper bound.")
+    
+    # COMPUTATIONS
+    # Computes TMVN approximation over the interval M+ or Mb
+    kb, error = scipy.stats.mvn.mvnun(lb, ub, mtilde, Cmtilde)
+    assert error==0, 'Potential errors in TMVN approximation'
+    Kb = 1./kb
+    
+    # Lower and upper bounds over M+2 ou Mb2 interval
+    lb2 = np.delete(lb, ind_m1)
+    ub2 = np.delete(ub, ind_m1)
+    
+    # Computes TMVN approximation over the interval M+2 or Mb2
+    tmvn, error = scipy.stats.mvn.mvnun(lb2, ub2, b(m_value), iA)
+    assert error==0, 'Potential errors in TMVN approximation'
         
-    return Kb * np.exp(-0.5 * (np.array([(m_value - rmtilde1).T @ iCmtilde11]) @ (m_value - rmtilde1))) * tmvn 
+    return Kb * np.exp(-0.5 * \
+                       (np.array([(m_value - rmtilde1).T @ iCmtilde11]) @ \
+                        (m_value - rmtilde1))) * tmvn 
+
+
+def exact_uniform(G, d, Cd, m, m0):
+    """
+    Computes the xact solution for the overdetermined inverse problem with 
+    uniform priors.
+    Solves Eq.22 from Nocquet (2018).
+    
+    Parameters
+    ----------
+    G : array, shape (n, p)
+        Model matrix.
+    d : array, shape (n,)
+        Data vector.
+    Cd : array, shape (p, p)
+        Data covariance matrix.
+    m : array, shape (p,)
+        Parameters values to be evaluated 
+    m0 : array, shape (p,)
+        Mean of a priori Gaussian density probability function.
+
+
+    Returns
+    -------
+    float
+        Marginal probability for the value m_value.
+    """
+    
+    # Inverse of Cd
+    iCd = np.linalg.inv(Cd)
+    
+    # Determinant of Cd
+    detCd = np.linalg.det(Cd)
+    
+    # Number of data 
+    n = len(d)
+    
+    # Computation of Cmtilde and mtilde  
+    Cmtilde = np.linalg.inv(G.T @ iCd @ G)  # Eq 22
+    mtilde = Cmtilde @ G.T @ iCd @ d  # Eq 22
+    
+    # Computationf od Kd, K0 and Ku0
+    Kd = 1. / ((2 * np.pi)**(1/n) * np.sqrt(detCd))
+    K0 = d.T @ iCd @ (d - G @ mtilde)  # Eq B2
+    Ku0 = np.exp(-0.5 * K0) * Kd
+    
+
+    return Ku0 * np.exp(-0.5 * ((m - mtilde).T @ np.linalg.inv(Cmtilde) @ \
+                                (m - mtilde)))
+
+
+def likelihood(G, d, Cd, m):
+    """
+    Computes the likelihood of parameters m.
+
+    Parameters
+    G : array, shape (n, p)
+        Model matrix.
+    d : array, shape (n,)
+        Data vector.
+    Cd : array, shape (p, p)
+        Data covariance matrix.
+    m : array, shape (p,)
+        Parameters values to be evaluated 
+
+    Returns
+    -------
+    float
+        Likelihood of parameters m.
+
+    """
+    Cd_inv = np.linalg.inv(Cd)
+    
+    
+    return 0.5 * (((G @ m) - d).transpose() @ Cd_inv @ ((G @ m) - d))
+
+
+def multi_gauss_distrib(G, d, Cd, Cm, m, m0):
+    """
+    Computes multivariate Gaussian distribution.
+
+    Parameters
+    ----------
+    G : array, shape (n, p)
+        Model matrix.
+    d : array, shape (n,)
+        Data vector.
+    Cd : array, shape (p, p)
+        Data covariance matrix.
+    Cm : array, shape (n, n)
+        Model covariance matrix.
+    m : array, shape (p,)
+        Parameters values to be evaluated 
+    m0 : array, shape (p,)
+        Mean of a priori Gaussian density probability function.
+
+    Returns
+    -------
+    res : TYPE
+        DESCRIPTION.
+
+    """
+    
+    # Inverse of Cm and Cd
+    iCm = np.linalg.inv(Cm)  
+    iCd = np.linalg.inv(Cd)
+ 
+    # Number of data
+    n= len(d)
+    
+    # Computation of Cmtilde and mtilde
+    Cmtilde = np.linalg.inv((G.T @ iCd @ G) + iCm)
+    mtilde = np.linalg.inv((G.T @ iCd @ G) + iCm) @ ((G.T @ iCd @ d) + iCm @ \
+                                                     m0)
+    # Inverse of Cmtilde
+    iCmtilde = np.linalg.inv(Cmtilde)
+    
+    # Determinant of Cmtilde
+    detCmtilde = np.linalg.det(Cmtilde)
+    
+    return (2 * np.pi)**(-n/2) * detCmtilde**(0.5)  * \
+        np.exp(-0.5 * ((m - mtilde).T @ iCmtilde @ (m - mtilde)))
