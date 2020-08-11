@@ -328,14 +328,7 @@ def marginal_1D(G, d, Cd, Cm, m0, m_value, ind_m1, bounds=(0, 10)):
     # Computes lower and upper bounds
     lb, ub = prepare_bounds(bounds, p)    
     
-    # Checks that bounds are correctly definedG = np.array([[-7., -4.], [1., 10.], [2., -11.]])
-d = np.array([[10.], [3.], [-5.]])
-Cd = np.identity(3, dtype=float) * 5.**2
-Cm = np.identity(2, dtype=float) * (0.5 / 2)**2
-Cd_inv = np.linalg.inv(Cd)
-Cm_inv = np.linalg.inv(Cm)
-m0 = np.array([[0.5], [0.5]])
-m = np.array([[0.5], [0.3]])
+    # Checks that bounds are correctly defined
     if lb.shape != (p,) and ub.shape != (p,):
         raise ValueError("Bounds have wrong shape.")
 
@@ -356,10 +349,11 @@ m = np.array([[0.5], [0.3]])
     # Computes TMVN approximation over the interval M+2 or Mb2
     tmvn, error = scipy.stats.mvn.mvnun(lb2, ub2, b(m_value), iA)
     assert error==0, 'Potential errors in TMVN approximation'
-        
-    return Kb * np.exp(-0.5 * \
-                       (np.array([(m_value - rmtilde1).T @ iCmtilde11]) @ \
-                        (m_value - rmtilde1))) * tmvn 
+    
+    
+    return float(Kb * np.exp(-0.5 * (np.array([(m_value - rmtilde1).T @ \
+                                               iCmtilde11]) @ \
+                                     (m_value - rmtilde1))) * tmvn)
 
 
 def exact_uniform(G, d, Cd, m, m0):
